@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stickman Combat</title>
+<style>
+  body {
+    margin: 0; background: #071827; color: #d7eef4; font-family: Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+  }
+  header {
+    margin: 20px; display: flex; align-items: center; gap: 20px;
+  }
+  #healthBar {
+    width: 300px; height: 22px; border-radius: 12px; background: #222a38; overflow: hidden;
+    box-shadow: inset 0 0 6px #0008;
+    position: relative;
+  }
+  #healthFill {
+    height: 100%; background: linear-gradient(90deg, #e64a4a, #ffb86b);
+    width: 100%; transition: width 0.3s ease;
+  }
+  #healthText {
+    position: absolute; width: 100%; text-align: center; top: 0; line-height: 22px;
+    font-weight: bold; color: #071827; user-select: none;
+  }
+  #score {
+    font-size: 20px; font-weight: bold;
+  }
+  #actions {
+    margin: 0 20px 20px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
+  }
+  button.action {
+    background: #0b1220; color: #7fe3a7; border: 1.5px solid #5fcf9e;
+    padding: 10px 14px; border-radius: 12px; font-weight: 600; cursor: pointer;
+    user-select: none;
+    transition: background-color 0.3s ease;
+  }
+  button.action.selected {
+    background: #19d85b;
+    color: #071827;
+    border-color: #17a34b;
+  }
+  button.action:hover {
+    background: #17a34b;
+    color: #071827;
+  }
+  #gameCanvas {
+    background: linear-gradient(180deg, #092637, #071827);
+    border-radius: 12px;
+    display: block;
+    max-width: 100%;
+    touch-action: none;
+  }
+  #log {
+    max-height: 120px;
+    width: 320px;
+    overflow-y: auto;
+    background: #0b1220;
+    border-radius: 10px;
+    padding: 10px;
+    color: #aad9b7;
+    font-size: 13px;
+    user-select: none;
+  }
+  #resetBtn {
+    background: #ff7a7a;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 12px;
+    color: white;
+    font-weight: 700;
+    cursor: pointer;
+    user-select: none;
+    margin: 15px auto;
+    display: block;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div id="healthBar" aria-label="Health bar">
+    <div id="healthFill"></div>
+    <div id="healthText">HP: 100 / 100</div>
+  </div>
+  <div>Score: <span id="score">0</span></div>
+</header>
+
+<div id="actions">
+  <button class="action selected" data-action="tap">Tap — 2HP</button>
+  <button class="action" data-action="knife">Knife — 10HP</button>
+  <button class="action" data-action="gun">Gun — 50HP</button>
+  <button class="action" data-action="throw">Pick & Throw — 5HP</button>
+  <button class="action" data-action="tickle">Tickle — 10HP</button>
+</div>
+
+<canvas id="gameCanvas" width="820" height="480"></canvas>
+
+<div id="log" aria-live="polite" aria-atomic="true"></div>
+
+<button id="resetBtn">Reset Game</button>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const healthFill = document.getElementById('healthFill');
+  const healthText = document.getElementById('healthText');
+  const scoreEl = document.getElementById('score');
+  const logEl = document.getElementById('log');
+  const resetBtn = document.getElementById('resetBtn');
+  const actionButtons = document.querySelectorAll('button.action');
+
+  const WIDTH = canvas.width;
+  const HEIGHT = canvas.height;
+
+  let state = {
+    maxHP: 100,
+    hp: 100,
+    score: 0,
+    selectedAction: 'tap',
+    dead: false,
+    pickedUp: false,
+    pickedOffsetX: 0,
+    pickedOffsetY: 0,
+  };
+
+  // Stickman state
+  let stickman = {
+    x: WIDTH / 2,
+    y: HEIGHT / 2 + 40,
+    vx: 0,
+    vy: 0,
+    rotation: 0,
+    rotationSpeed: 0,
+    headRadius: 22,
+  };
+
+  // For gun bullets
+  let bullets = [];
+
+  // For slash animation particles
+  let slashes = [];
+
+  // Logging helper
+  function log(message) {
+    const div = document.createElement('div');
+    div.textContent = message;
+    logEl.prepend(div);
+    if (logEl.childElementCount > 60) {
+      logEl.removeChild(logEl.lastChild);
+    }
+  }
+
+  // UI update
+  function updateUI() {
+    const pct = Math.max(0, Math.min(1, state.hp / state.maxHP));
+    healthFill.style.width = (pct * 100).toFixed(1) + '%';
+    healthText.textContent = `HP: ${Math.max(0, Math.round(state.hp))} / ${state.maxHP}`;
+    scoreEl.textContent = state.score;
+  }
+
+  // Action selection
+  actionButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (state.dead) return;
+      actionButtons.forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      state.selectedAction = btn.dataset.action;
+    });
+  });
+
+  resetBtn.addEventListener('click', () => {
+    resetGame();
+  });
+
+  function resetGame() {
+    state.hp = state.maxHP;
+    state.score = 0;
+    state.dead = false;
+    state.pickedUp = false;
+    stickman.x = WIDTH / 2;
+    stickman.y = HEIGHT / 2 + 40;
+    stickman.vx = 0;
+    stickman.vy = 0;
+    stickman.rotation = 0;
+    stickman.rotationSpeed = 0;
+    bullets = [];
+    slashes = [];
+    updateUI();
+    log('Game reset. Choose an action and attack the stickman!');
+  }
+
+  // Hit testing
+  function isPointOnHead(x, y) {
+    const dx = x - stickman.x;
+    const dy = y - (stickman.y - 60);
+    return dx * dx + dy * dy <= stickman.headRadius * stickman.headRadius;
+  }
+
+  function isPointOnBody(x, y) {
+    const bodyLeft = stickman.x - 20;
+    const bodyTop = stickman.y - 40;
+    const bodyWidth = 40;
+    const bodyHeight = 120;
+    return x >= bodyLeft && x <= bodyLeft + bodyWidth && y >= bodyTop && y <= bodyTop + bodyHeight;
+  }
+
+  // Damage applying with reactions
+  function applyDamage(amount, source) {
+    if (state.dead) return;
+    state.hp -= amount;
+    state.score += Math.max(1, Math.round(amount));
+    log(`${source} dealt ${amount} HP damage!`);
+    // Visual recoil
+    stickman.vx += (Math.random() - 0.5) * 2 + (amount / 20) * (Math.random() > 0.5 ? 1 : -1);
+    stickman.vy -= Math.min(5, amount / 12);
+    flashCanvas();
+    if (state.hp <= 0) {
+      state.dead = true;
+      stickman.rotationSpeed = (Math.random() > 0.5 ? 1 : -1) * 0.8;
+      stickman.vx += (Math.random() - 0.5) * 10;
+      stickman.vy -= 6;
+      log('Stickman is down! Game over.');
+    }
+    updateUI();
+  }
+
+  // Canvas flash effect on damage
+  function flashCanvas() {
+    canvas.style.boxShadow = '0 0 10px 6px rgba(255,80,80,0.3) inset';
+    setTimeout(() => {
+      canvas.style.boxShadow = '';
+    }, 150);
+  }
+
+  // Slash animation particles
+  function createSlash(x, y) {
+    slashes.push({ x, y, time: 0 });
+  }
+
+  // Gun shooting - create bullet from bottom left gun position
+  function shootBullet(targetX, targetY) {
+    if (state.dead) return;
+    const gunX = 60;
+    const gunY = HEIGHT - 40;
+    const angle = Math.atan2(targetY - gunY, targetX - gunX);
+    const speed = 14;
+    bullets.push({
+      x: gunX,
+      y: gunY,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      radius: 6,
+    });
+    log('Gun fired!');
+  }
+
+  // Pointer events for desktop and touch
+  let pointer = { x: 0, y: 0, down: false };
+
+  function getPointerPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX ?? e.touches?.[0]?.clientX ?? 0;
+    const y = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
+    return { x: x - rect.left, y: y - rect.top };
+  }
+
+  canvas.addEventListener('mousedown', e => {
+    pointer.down = true;
+    const pos = getPointerPos(e);
+    pointer.x = pos.x;
+    pointer.y = pos.y;
+    handlePointerDown(pos.x, pos.y);
+  });
+
+  canvas.addEventListener('touchstart', e => {
+    pointer.down = true;
+    const pos = getPointerPos(e);
+    pointer.x = pos.x;
+    pointer.y = pos.y;
+    handlePointerDown(pos.x, pos.y);
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener('mousemove', e => {
+    const pos = getPointerPos(e);
+    pointer.x = pos.x;
+    pointer.y = pos.y;
+    handlePointerMove(pos.x, pos.y);
+  });
+
+  canvas.addEventListener('touchmove', e => {
+    const pos = getPointerPos(e);
+    pointer.x = pos.x;
+    pointer.y = pos.y;
+    handlePointerMove(pos.x, pos.y);
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener('mouseup', e => {
+    pointer.down = false;
+    const pos = getPointerPos(e);
+    handlePointerUp(pos.x, pos.y);
+  });
+
+  canvas.addEventListener('touchend', e => {
+    pointer.down = false;
+    handlePointerUp(pointer.x, pointer.y);
+  });
+
+  // Pointer handling logic by action type
+  function handlePointerDown(x, y) {
+    if (state.dead) return;
+    const action = state.selectedAction;
+    if (action === 'throw') {
+      // Can only pick up if touching stickman body or head
+      if (isPointOnHead(x, y) || isPointOnBody(x, y)) {
+        state.pickedUp = true;
+        state.pickedOffsetX = x - stickman.x;
+        state.pickedOffsetY = y - stickman.y;
+        log('Picked up stickman');
+      }
+      return;
+    }
+    if (action === 'tap') {
+      if (isPointOnHead(x, y) || isPointOnBody(x, y)) {
+        applyDamage(2, 'Tap');
+      }
+    } else if (action === 'knife') {
+      if (isPointOnHead(x, y) || isPointOnBody(x, y)) {
+        applyDamage(10, 'Knife');
+        createSlash(x, y);
+      } else {
+        log('Knife missed!');
+      }
+    } else if (action === 'gun') {
+      shootBullet(x, y);
+    } else if (action === 'tickle') {
+      if (isPointOnHead(x, y) || isPointOnBody(x, y)) {
+        applyDamage(10, 'Tickle');
+        // Wobble effect
+        stickman.vx += (Math.random() - 0.5) * 3;
+        stickman.vy -= 3;
+      } else {
+        log('Too far to tickle');
+      }
+    }
+  }
+
+  function handlePointerMove(x, y) {
+    if (state.pickedUp) {
+      stickman.x = x - state.pickedOffsetX;
+      stickman.y = y - state.pickedOffsetY;
+    }
+  }
+
+  function handlePointerUp(x, y) {
+    if (state.pickedUp) {
+      // Throw stickman with velocity based on release position
+      const dx = x - WIDTH / 2;
+      const dy = y - HEIGHT / 2;
+      stickman.vx = dx * 0.06 + (Math.random() - 0.5) * 3;
+      stickman.vy = dy * 0.06 - 6;
+      applyDamage(5, 'Thrown');
+      state.pickedUp = false;
+      log('Threw stickman');
+    }
+  }
+
+  // Game update loop
+  function update(dt) {
+    // Gravity and physics for stickman
+    if (!state.pickedUp) {
+      stickman.vy += 0.5; // gravity
+      stickman.x += stickman.vx;
+      stickman.y += stickman.vy;
+      stickman.vx *= 0.98;
+      stickman.vy *= 0.98;
+
+      // Keep stickman in bounds horizontally
+      if (stickman.x < 40) {
+        stickman.x = 40;
+        stickman.vx *= -0.5;
+      }
+      if (stickman.x > WIDTH - 40) {
+        stickman.x = WIDTH - 40;
+        stickman.vx *= -0.5;
+      }
+
+      // Ground collision
+      if (stickman.y > HEIGHT - 40) {
+        stickman.y = HEIGHT - 40;
+        if (stickman.vy > 0) stickman.vy *= -0.35;
+        stickman.vx *= 0.7;
+        if (Math.abs(stickman.vy) < 1) stickman.vy = 0;
+      }
+
+      // Rotation updates
+      if (state.dead) {
+        stickman.rotation += stickman.rotationSpeed;
+        stickman.rotationSpeed *= 0.95;
+      } else {
+        stickman.rotation = Math.sin(Date.now() / 250 + stickman.x / 40) * 0.02;
+      }
+    } else {
+      // If picked up, no velocity or gravity
+      stickman.vx = 0;
+      stickman.vy = 0;
+      stickman.rotation = 0;
+    }
+
+    // Update bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.x += b.vx;
+      b.y += b.vy;
+      // Check collision with stickman head/body
+      const dx = b.x - stickman.x;
+      const dy = b.y - (stickman.y - 60);
+      if (
+        dx * dx + dy * dy < (stickman.headRadius + b.radius) * (stickman.headRadius + b.radius) ||
+        (Math.abs(b.x - stickman.x) < 40 && Math.abs(b.y - (stickman.y - 10)) < 60)
+      ) {
+        applyDamage(50, 'Gunshot');
+        bullets.splice(i, 1);
+        continue;
+      }
+      // Remove bullets out of bounds
+      if (b.x < 0 || b.x > WIDTH || b.y < 0 || b.y > HEIGHT) {
+        bullets.splice(i, 1);
+      }
+    }
+
+    // Update slashes
+    for (let i = slashes.length - 1; i >= 0; i--) {
+      slashes[i].time += dt;
+      if (slashes[i].time > 400) {
+        slashes.splice(i, 1);
+      }
+    }
+  }
+
+  // Draw stickman with simple limbs and face
+  function drawStickman() {
+    ctx.save();
+    ctx.translate(stickman.x, stickman.y);
+    ctx.rotate(stickman.rotation);
+
+    // Shadow
+    ctx.beginPath();
+    ctx.ellipse(0, 84, 48, 12, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fill();
+
+    // Head
+    const headX = 0;
+    const headY = -60;
+    ctx.fillStyle = '#e9f7ff';
+    ctx.beginPath();
+    ctx.arc(headX, headY, stickman.headRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Face (eyes & mouth)
+    ctx.fillStyle = '#042233';
+    ctx.beginPath();
+    ctx.arc(headX - 7, headY - 6, 3, 0, Math.PI * 2);
+    ctx.arc(headX + 7, headY - 6, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(headX, headY + 6, 8, 4, 0, 0, Math.PI);
+    ctx.fill();
+
+    // Body
+    ctx.strokeStyle = '#d7eef4';
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+
+    // Neck
+    ctx.beginPath();
+    ctx.moveTo(0, headY + stickman.headRadius);
+    ctx.lineTo(0, headY + stickman.headRadius + 15);
+    ctx.stroke();
+
+    // Torso
+    ctx.beginPath();
+    ctx.moveTo(0, headY + stickman.headRadius + 15);
+    ctx.lineTo(0, 60);
+    ctx.stroke();
+
+    // Arms
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-45, 20);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(45, 10);
+    ctx.stroke();
+
+    // Legs
+    ctx.beginPath();
+    ctx.moveTo(0, 60);
+    ctx.lineTo(-25, 110);
+    ctx.moveTo(0, 60);
+    ctx.lineTo(25, 110);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // Draw bullets
+  function drawBullets() {
+    ctx.fillStyle = '#ff4d4d';
+    bullets.forEach(b => {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  // Draw slash animation
+  function drawSlashes() {
+    ctx.strokeStyle = '#ffad55';
+    ctx.lineWidth = 3;
+    slashes.forEach(s => {
+      const alpha = 1 - s.time / 400;
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.moveTo(s.x - 10, s.y - 10);
+      ctx.lineTo(s.x + 10, s.y + 10);
+      ctx.moveTo(s.x + 10, s.y - 10);
+      ctx.lineTo(s.x - 10, s.y + 10);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  // Main loop
+  let lastTime = 0;
+  function loop(timestamp = 0) {
+    const dt = timestamp - lastTime;
+    lastTime = timestamp;
+
+    update(dt);
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    drawStickman();
+    drawBullets();
+    drawSlashes();
+
+    requestAnimationFrame(loop);
+  }
+
+  // Start
+  resetGame();
+  loop();
+})();
+</script>
+
+</body>
+</html>
